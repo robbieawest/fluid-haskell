@@ -159,8 +159,8 @@ calculateV grid i j = (getY (getVel (getElem i j grid)) +
                        getY (getVel (getElem (i - 1) (j + 1) grid))
                        ) / 4.0
 
-advectX :: Matrix GridEntry -> (Int, Int) -> (Float, Float) -> Float
-advectX grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
+advectVelX :: Matrix GridEntry -> (Int, Int) -> (Float, Float) -> Float
+advectVelX grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
     where
         lerp1 = lerp uij ui1j fract_i
         lerp2 = lerp uij1 ui1j1 fract_i
@@ -171,8 +171,8 @@ advectX grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
         ui1j1 = getX $ getVel $ getElem (floor_i + 1) (floor_j + 1) grid
 
 
-advectY :: Matrix GridEntry ->  (Int, Int) -> (Float, Float) -> Float
-advectY grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
+advectVelY :: Matrix GridEntry ->  (Int, Int) -> (Float, Float) -> Float
+advectVelY grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
     where
         lerp1 = lerp vij vi1j fract_i
         lerp2 = lerp vij1 vi1j1 fract_i
@@ -182,8 +182,28 @@ advectY grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
         vij1 = getY $ getVel $ getElem floor_i (floor_j + 1) grid
         vi1j1 = getY $ getVel $ getElem (floor_i + 1) (floor_j + 1) grid
 
+advectD :: Matrix GridEntry ->  (Int, Int) -> (Float, Float) -> Float
+advectD grid (floor_i, floor_j) (fract_i, fract_j) = lerp lerp1 lerp2 fract_j
+    where
+        lerp1 = lerp dij di1j fract_i
+        lerp2 = lerp dij1 di1j1 fract_i
+        
+        dij = getDensity $ getElem floor_i floor_j grid
+        di1j = getDensity $ getElem (floor_i + 1) floor_j grid
+        dij1 = getDensity $ getElem floor_i (floor_j + 1) grid
+        di1j1 = getDensity $ getElem (floor_i + 1) (floor_j + 1) grid
+
 advectVel :: Matrix GridEntry -> Float -> Float -> (Int, Int) -> GridEntry -> GridEntry
-advectVel grid boxSize dt (i, j) (GridEntry d v p s) = GridEntry d (advectX grid (fi, fj) (fri, frj), advectY grid (fi, fj) (fri, frj)) p s
+advectVel grid boxSize dt (i, j) (GridEntry d v p s) = GridEntry d (advectVelX grid (fi, fj) (fri, frj), advectVelY grid (fi, fj) (fri, frj)) p s
+    where
+        (GridEntry d (x_new, y_new) p s) = GridEntry d (getX v, calculateV grid i j) p s
+        (posx, posy) = backtraceVelocity i j (GridEntry d (x_new, y_new) p s) dt
+        (fi, fj) = (floor posx, floor posy) --floors
+        (fri, frj) = (posx - fromIntegral fi, posy - fromIntegral fj) --fracts
+
+--Copy of advectVel for densities
+advectDen:: Matrix GridEntry -> Float -> Float -> (Int, Int) -> GridEntry -> GridEntry
+advectDen grid boxSize dt (i, j) (GridEntry d v p s) = GridEntry (advectD grid (fi, fj) (fri, frj)) v p s
     where
         (GridEntry d (x_new, y_new) p s) = GridEntry d (getX v, calculateV grid i j) p s
         (posx, posy) = backtraceVelocity i j (GridEntry d (x_new, y_new) p s) dt
@@ -193,8 +213,8 @@ advectVel grid boxSize dt (i, j) (GridEntry d v p s) = GridEntry d (advectX grid
 advectVelocities :: Status -> Float -> Status
 advectVelocities (Status g b w h) dt = Status (mapPos (advectVel g b dt) g) b w h
 
-advectDensities :: Status -> Status
-advectDensities (Status g b w h) = undefined
+advectDensities :: Status -> Float -> Status
+advectDensities (Status g b w h) dt = Status (mapPos (advectDen g b dt) g) b w h
 
 isBorder :: Int -> Int -> Int -> Int -> Bool
 isBorder i j w h = i > 0 && i < h - 1 && j > 0 && j < w - 1
@@ -230,12 +250,22 @@ initialStatus width height = addBorder $ Status
                     width
                     height
 
+calculatePressureColour :: Float -> Color
+calculatePressureColour pressure = undefined
+
+drawGridEntry :: Float -> (Int, Int) -> GridEntry -> Picture
+drawGridEntry b (i, j) (GridEntry d v p s) = trans $ col rect
+    where
+        col = color $ calculatePressureColour p
+        trans = translate (fromIntegral i) (fromIntegral j)
+        rect = rectangleSolid b b
+
 draw :: Status -> Picture
-draw = undefined
+draw (Status g b w h) = Pictures ( Data.Matrix.toList (mapPos (drawGridEntry b) g ))
 
 
 
 step :: ViewPort -> Float -> Status -> Status
-step view dt status = advectVelocities (
-                        project (modifyVelocities dt status) 0 dt) dt
+step view dt status = advectDensities (advectVelocities (
+                        project (modifyVelocities dt status) 0 dt) dt) dt
 
