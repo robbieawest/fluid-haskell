@@ -20,8 +20,6 @@ main = simulate
 
 
 
-initMatrix  :: Int -> Int -> a -> Matrix a
-initMatrix w h def = matrix w h (\(i, j) -> def)
 
 updateMat :: Matrix a -> [((Int, Int), a)] -> Matrix a
 updateMat m [] = m
@@ -40,7 +38,13 @@ data GridEntry = GridEntry {
     velocity :: Vec2f, -- Point :: (Float, Float)
     pressure :: Float,
     s :: Int --Decides whether the entry is a wall. 1 for not wall, 0 for wall
-} deriving(Eq, Show)
+} deriving(Eq)
+
+instance Show GridEntry where
+    show (GridEntry d v p s) =
+        show d Prelude.++ "," Prelude.++ show v Prelude.++ "," Prelude.++ show p Prelude.++ "," Prelude.++ show s
+
+
 
 type Vec2f = Point
 
@@ -87,6 +91,11 @@ data Status = Status {
     height :: Int
 } deriving(Show)
 
+getWidth :: Status -> Int 
+getWidth (Status _ _ w _) = w
+
+getHeight :: Status -> Int
+getHeight (Status _ _ _ h) = h
 
 
 addGravity :: Float -> (Int, Int) -> GridEntry -> GridEntry
@@ -112,7 +121,9 @@ proj g i j d s box dt = updateMat g
                     ]
 
 projectOnce :: Status -> Int -> Int -> Float -> Status
-projectOnce (Status grid b w h) i j dt = Status (proj grid i j d s b dt) b w h
+projectOnce (Status grid b w h) i j dt
+    | getS (getElem i j grid) == 1 = Status (proj grid i j d s b dt) b w h --Do not run for walls
+    | otherwise = Status grid b w h
     where
         d = getX ( getVel(getElem (i + 1) j grid)) - getX (getVel(getElem i j grid)) + getY (getVel(getElem i (j + 1) grid)) - getY (getVel(getElem i j grid))
         s = fromIntegral ( getS(getElem (i + 1) j grid) + getS(getElem (i - 1) j grid) + getS(getElem i (j + 1) grid) + getS(getElem i (j - 1) grid) )
@@ -121,10 +132,20 @@ projectOnce (Status grid b w h) i j dt = Status (proj grid i j d s b dt) b w h
 
 
 projectRow :: Status -> Int -> Int -> Float -> Status
-projectRow stat i j dt = projectRow (projectOnce stat i j dt) i (j + 1) dt
+projectRow stat i j dt
+    | j == 1 || j == width = stat --Check for border columns
+    | j < width - 1 = projectRow (projectOnce stat i j dt) i (j + 1) dt
+    | j == width - 1 = projectOnce stat i j dt --Last case
+    where
+        width = getWidth stat
 
 project :: Status -> Int -> Float -> Status
-project stat i dt = project (projectRow stat i 0 dt) (i + 1) dt
+project stat i dt
+    | i == 1 || i == height = stat --Check for border rows
+    | i < height - 1 = project (projectRow stat i 1 dt) (i + 1) dt
+    | i == height - 1 = projectRow stat i 1 dt --Last case
+    where
+        height = getHeight stat
 
 
 lerp :: Float -> Float -> Float -> Float
@@ -216,8 +237,47 @@ advectVelocities (Status g b w h) dt = Status (mapPos (advectVel g b dt) g) b w 
 advectDensities :: Status -> Float -> Status
 advectDensities (Status g b w h) dt = Status (mapPos (advectDen g b dt) g) b w h
 
-isBorder :: Int -> Int -> Int -> Int -> Bool
-isBorder i j w h = i > 0 && i < h - 1 && j > 0 && j < w - 1
+
+
+
+calculatePressureColour :: Float -> Float -> Float -> Color
+calculatePressureColour pressure minP maxP = case indicator of
+        0 -> makeColor 0.0 val 1.0 1.0
+        1 -> makeColor 0.0 1.0 1.0 1.0
+        2 -> makeColor val 1.0 0.0 1.0
+        3 -> makeColor 1.0 (1.0 - val) 0.0 1.0
+    where
+        pressureVal = min (max pressure minP) (maxP - 0.001)
+        pressureDifference = maxP - minP
+        pressureVal2
+            | pressureDifference == 0 = 0.5
+            | otherwise = (pressureVal - minP) / pressureDifference
+        amplify = 0.25
+        indicator = fromIntegral (floor (pressureVal2 / amplify))
+        val = (pressureVal2 - (indicator * amplify)) / amplify;
+
+
+drawGridEntry :: Float -> Float -> Float -> (Int, Int) -> GridEntry -> Picture
+drawGridEntry b minP maxP (i, j) (GridEntry d v p s) = trans $ col rect --translation is to set at a certain position, very functional
+    where
+        col = color $ calculatePressureColour p minP maxP
+        trans = translate ((fromIntegral j - 0.5) * b - 450.0) ((fromIntegral i - 0.5) * b - 450.0)-- j -> x , i -> y
+        rect = rectangleSolid b b
+
+minMaxPressure :: [GridEntry] -> Float -> (Float -> Float -> Bool) -> Float
+minMaxPressure [] curr minMax = curr
+minMaxPressure (x:xs) curr minMax
+    | p `minMax` curr = minMaxPressure xs p minMax
+    | otherwise = minMaxPressure xs curr minMax
+    where p = getPressure x
+
+
+draw :: Status -> Picture
+draw (Status g b w h) = Pictures ( Data.Matrix.toList (mapPos (drawGridEntry b minP maxP) g ))
+    where
+        listG = Data.Matrix.toList g
+        minP = minMaxPressure listG 0.0 (<)
+        maxP = minMaxPressure listG 0.0 (>)
 
 
 {-
@@ -233,15 +293,23 @@ addBorder empty w h i = empty
 -- addBorder (singleton (empty)) w h i = singleton empty
 addBorder (row:rows) w h i = checkRow row w h i 0 : addBorder rows w h (i + 1)
 -}
+
+isNotBorder :: Int -> Int -> Int -> Int -> Bool
+isNotBorder i j w h = i > 1 && i < h && j > 1 && j < w
+
 addBorder :: Status -> Status
 addBorder (Status g b w h) = Status 
                                 (mapPos (
                                     \(i, j) (GridEntry d v p s) ->
-                                         if isBorder i j w h
-                                            then GridEntry d v p 0
-                                            else GridEntry d v p 1)
+                                         if isNotBorder i j w h
+                                            then GridEntry d v p 1
+                                            else GridEntry d v p 0)
                                         g)
                                 b w h    
+
+initMatrix  :: Int -> Int -> GridEntry -> Matrix GridEntry
+--initMatrix w h def = matrix w h (\(i, j) -> def)
+initMatrix w h def = matrix w h (\(i, j) -> GridEntry 0.0 (0.0, 0.0) ((fromIntegral i * fromIntegral j) / 20.0) 1)
 
 initialStatus :: Int -> Int -> Status
 initialStatus width height = addBorder $ Status 
@@ -250,22 +318,8 @@ initialStatus width height = addBorder $ Status
                     width
                     height
 
-calculatePressureColour :: Float -> Color
-calculatePressureColour pressure = undefined
-
-drawGridEntry :: Float -> (Int, Int) -> GridEntry -> Picture
-drawGridEntry b (i, j) (GridEntry d v p s) = trans $ col rect
-    where
-        col = color $ calculatePressureColour p
-        trans = translate (fromIntegral i) (fromIntegral j)
-        rect = rectangleSolid b b
-
-draw :: Status -> Picture
-draw (Status g b w h) = Pictures ( Data.Matrix.toList (mapPos (drawGridEntry b) g ))
-
-
-
 step :: ViewPort -> Float -> Status -> Status
 step view dt status = advectDensities (advectVelocities (
-                        project (modifyVelocities dt status) 0 dt) dt) dt
-
+                        project (modifyVelocities dt status) 1 dt) dt) dt
+--step view dt status = advectDensities (advectVelocities(modifyVelocities dt status) dt) dt
+--step view dt status = status
