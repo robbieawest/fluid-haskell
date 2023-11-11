@@ -1,6 +1,6 @@
 module Interact where
 
-import Data.Vector
+import Data.Strict.Vector as V
 import Prelude hiding (replicate, head, tail, map)
 
 import Graphics.Gloss hiding (Vector)

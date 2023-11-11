@@ -1,7 +1,7 @@
 
 --This file contains the basic data structs and functions
 module Base where
-import Data.Vector as V
+import Data.Strict.Vector as V
 import Prelude hiding (replicate, head, tail, map)
 
 import Graphics.Gloss hiding (Vector)

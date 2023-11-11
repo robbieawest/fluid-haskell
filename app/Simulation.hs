@@ -1,11 +1,13 @@
+{-# LANGUAGE BangPatterns #-}
 module Simulation where
 
-import Data.Vector
+import Data.Strict.Vector as V
 import Prelude hiding (replicate, head, tail, map)
 
 import Graphics.Gloss hiding (Vector)
 import Graphics.Gloss.Data.ViewPort
 import Base
+import Data.Maybe
 
 {-
 -- Setting Up
@@ -97,11 +99,32 @@ data Field = Pressure | U | V | Density
 clearPressure :: Status -> Status
 clearPressure (Status u v p d s h numX numY) = Status u v (replicate (numX * numY) 0.0) d s h numX numY
 
-extrapolate :: Status -> Status
-extrapolate (Status u v p d s h numX numY) = Status (extraU u numX numY) (extraV v numX numY) p d s h numX numY
+
+replaceCheck :: [(Int, Float)] -> Int -> Float -> Float
+replaceCheck upd ind val
+    | res = resf
+    | otherwise = val
     where
-        extraU u numX numY = u // iterU 0
-        extraV v numX numY = v // iterV 0
+        (res, resf) = searchUpd upd ind
+
+        searchUpd [] _ = (False, 0)
+        searchUpd ((i, v):upds) index  
+            | i == ind = (True, v)
+            | otherwise = searchUpd upds index
+
+--This is an O(n + m) function where m = len update, n = len field
+updateField :: Vector Float -> [(Int, Float)] -> Vector Float
+updateField field updates = res
+    where
+        res = imap (replaceCheck updates) field
+
+extrapolate :: Status -> Status
+extrapolate (Status !u !v !p !d !s !h !numX !numY) = seq r2 (seq r1 Status r1 r2 p d s h numX numY)
+    where
+        !r1 = u // iterU 0
+        !r2 = v // iterV 0
+        -- !r1 = updateField u (iterU 0)
+        -- !r2 = updateField v (iterV 0)
         
         iterU iter
             | iter < numX = [
@@ -109,6 +132,7 @@ extrapolate (Status u v p d s h numX numY) = Status (extraU u numX numY) (extraV
                 (i2i1 (iter, numY - 1) numY, indf iter (numY - 2) numY u)
                 ] Prelude.++ iterU (iter + 1)
             | otherwise = []
+
         
         iterV iter
             | iter < numY = [
@@ -116,6 +140,8 @@ extrapolate (Status u v p d s h numX numY) = Status (extraU u numX numY) (extraV
                 (i2i1 (numX - 1, iter) numY, indf (numX - 2) iter numY v)
                 ] Prelude.++ iterV (iter + 1)
             | otherwise = []
+        
+
 
 --This function interpolates against a position, variable with each different field type
 sampleField :: Vector Float -> Float -> Float -> Float -> Int -> Int -> Field -> Float
@@ -189,7 +215,7 @@ advectV vField uField sField dt h numX numY ind currV
 
 
 advectVelocities :: Status -> Float -> Status --Code uses old field then blalblabla you need to update new vector without editing old
-advectVelocities (Status u v p d s h numX numY) dt = Status advectedU advectedV p d s h numX numY
+advectVelocities (Status u v p d s h numX numY) dt = seq advectedU (seq advectedV (Status advectedU advectedV p d s h numX numY))
     where 
         advectedU = imap (advectU u v s dt h numX numY) u
         advectedV = imap (advectV v u s dt h numX numY) v
@@ -227,20 +253,27 @@ proj (Status uField vField pField d sField h numX numY) dt i j
 
 projectInner :: Status -> Float -> Int -> Int -> Status
 projectInner (Status u v p d s h numX numY)  dt i j
-    | j < numY - 1 = projectInner (proj (Status u v p d s h numX numY) dt i j) dt i (j + 1)
+    | j < numY - 1 = seq projRes projectInner projRes dt i (j + 1)
     | otherwise = Status u v p d s h numX numY
+    where
+        projRes = proj (Status u v p d s h numX numY) dt i j
 
 projectFields :: Status -> Float -> Int -> Status
 projectFields (Status u v p d s h numX numY) dt iter
-    | iter < numX - 1 = projectFields (projectInner (Status u v p d s h numX numY) dt iter 1) dt (iter + 1)
+    | iter < numX - 1 = seq innerRes projectFields innerRes  dt (iter + 1)
     | otherwise = Status u v p d s h numX numY
+    where 
+        innerRes = projectInner (Status u v p d s h numX numY) dt iter 1
 
 project :: Status -> Int -> Float -> Status
 project (Status u v p d s h numX numY) iters dt = iterate (Status u v p d s h numX numY) 0
     where
         iterate stat ind --Gauss-Seidel relaxtion (Iteration iters times to approximate divergences(Since we use divergence to calculate divergence!))
-            | ind <= iters = iterate (projectFields stat dt 1) (ind + 1)
+            | ind <= iters = seq projRes iterate projRes (ind + 1)
             | otherwise = stat
+        
+        projRes = projectFields (Status u v p d s h numX numY) dt 1
+
 
 {-
 advectDensities :: Status -> Float -> Status

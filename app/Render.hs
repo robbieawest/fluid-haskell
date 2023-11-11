@@ -1,6 +1,7 @@
 module Render where
 
-import Data.Vector as V
+import Data.Strict.Vector as V
+--import Data.Vector as V ( imap, maximum, minimum, toList )
 import Prelude hiding (replicate, head, tail)
 
 import Graphics.Gloss hiding (Vector)
